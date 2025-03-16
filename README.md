@@ -1,69 +1,110 @@
-# EmbryoML Federated Learning Demo
+# EmbryoML: Federated Learning for IVF Clinics
 
-This project demonstrates a federated learning system for embryo image classification. Multiple computers can collaborate to train a shared model while keeping all data local and private.
+A federated learning system for embryo viability prediction. This system allows multiple IVF clinics to collaboratively train a machine learning model for embryo classification while keeping their patient data private and secure.
 
-## Quick Start
+## Features
 
-1. **Setup**: Run the setup script to install all required dependencies:
+- **Privacy-First Approach**: All patient data remains at each clinic - only model updates are shared
+- **Collaborative Learning**: Multiple clinics can contribute to a single powerful model
+- **Real-time Visualization**: Monitor training progress through an interactive UI
+- **External Connectivity**: Connect clinics across different networks using ngrok
+- **Real Embryo Data Support**: Works with real human embryo images
+
+## System Components
+
+The system consists of several key components:
+
+1. **Core Utilities** (`embryo_fl_utils.py`): Common functions and classes for the federated learning system
+2. **Federated Learning Demo** (`federated_embryo_demo.py`): The server and client implementation
+3. **Integrated App** (`integrated_embryo_fl_app.py`): A user-friendly Gradio interface
+4. **Sample Data Creation** (`create_sample_data.py`): Script to generate test data
+5. **Real Data Preparation** (`prepare_real_embryo_data.py`): Scripts to prepare real embryo images
+
+## Setup Instructions
+
+### 1. Install Dependencies
+
+```bash
+pip install torch torchvision flwr gradio pyngrok numpy pillow matplotlib
+```
+
+### 2. Prepare Data
+
+Either use synthetic data:
+```bash
+python create_sample_data.py
+```
+
+Or use real embryo data:
+```bash
+python download_real_data.py    # Download real embryo data from Google Drive
+python prepare_real_embryo_data.py    # Process the data for binary classification
+```
+
+### 3. Run the Integrated App
+
+```bash
+python integrated_embryo_fl_app.py
+```
+
+This will open a Gradio interface in your browser (typically at http://127.0.0.1:7860).
+
+## Using the App
+
+### For the Host Clinic:
+
+1. **Start Server**:
+   - Go to the "Server Control" tab
+   - Set the server port (default: 8090)
+   - Check "Use ngrok for external connections" to allow other clinics to connect over the internet
+   - Click "Start Server"
+
+2. **Share Connection Details**:
+   - Copy the connection command shown in the Server Output box
+   - Share this command with other participating clinics
+
+3. **Start Local Test Clinics** (Optional):
+   - Go to the "IVF Clinic Control" tab
+   - Enter the server address (usually 127.0.0.1:8090)
+   - Set a Clinic ID (start with 1)
+   - Click "Start Local IVF Clinic"
+   - Repeat with different Clinic IDs if desired
+
+4. **Monitor Progress**:
+   - Go to the "Visualization" tab to see training progress
+   - Check "System Status" periodically to see connected clinics and training status
+
+### For Participating Clinics:
+
+1. **Get the Required Files**:
+   - `federated_embryo_demo.py`
+   - `embryo_fl_utils.py`
+   - `create_sample_data.py` (to generate sample data)
+
+2. **Prepare Local Data**:
+   - Generate sample data: `python create_sample_data.py`
+   - Or use their own embryo images in the required format
+
+3. **Connect to the Server**:
+   - Run the command provided by the host clinic:
    ```
-   python setup_embryo_fl.py
+   python federated_embryo_demo.py client --server_address=X.ngrok.io:YYYY --client_id=Z
    ```
+   - Replace Z with a unique clinic ID (2, 3, 4, etc.)
 
-2. **Server Setup**: On one computer (the server), run:
-   ```
-   python federated_embryo_demo.py server --port=8080
-   ```
-   Note the IP address displayed, as clients will need to connect to this address.
+## How Federated Learning Works
 
-3. **Client Setup**: On each participating computer, run:
-   ```
-   python federated_embryo_demo.py client --server_address=<SERVER_IP>:8080 --client_id=<UNIQUE_ID>
-   ```
-   Replace `<SERVER_IP>` with the IP address of the server and `<UNIQUE_ID>` with a unique identifier for each client (e.g., 1, 2, 3).
+1. **Model Definition**: A CNN model architecture for embryo classification is defined
+2. **Server Initialization**: The central server coordinates but never sees patient data
+3. **Client Training**: Each clinic trains on their local data
+4. **Aggregation**: The server combines all clinic model updates into a global model
+5. **Distribution**: The improved global model is sent back to all clinics
+6. **Repeat**: This process continues for multiple rounds, improving accuracy
 
-## Data Preparation
+## Acknowledgments
 
-Each client needs a local dataset of embryo images in the `embryo_data` directory:
+This project is designed to showcase federated learning in a healthcare setting, particularly for IVF clinics where privacy concerns are paramount. The system demonstrates how clinics can leverage collective data insights while respecting patient privacy.
 
-- Images should follow the naming convention `*label_0*.png` or `*label_1*.png`
-- `label_1` indicates embryo survival
-- `label_0` indicates non-survival
+## License
 
-## How It Works
-
-1. **Server**: Coordinates the training process and aggregates model updates
-2. **Clients**: Train the model on their local data and send model updates (not the data) to the server
-3. **Aggregation**: The server combines all client model updates into a global model
-4. **Distribution**: The updated global model is sent back to all clients
-
-This approach provides:
-- **Privacy**: Raw image data never leaves each computer
-- **Collaboration**: The model benefits from diverse data sources
-- **Personalization**: Each client can further fine-tune the final model on their own data
-
-## Requirements
-
-- Python 3.6+
-- PyTorch
-- Flower (flwr)
-- Pillow
-- NumPy
-
-All dependencies are installed by the setup script.
-
-## Troubleshooting
-
-If you encounter network issues:
-- Ensure port 8080 (or your chosen port) is open on the server's firewall
-- Make sure all computers are on the same network
-- Try using the server's local IP address if connecting within the same network
-
-For data loading issues:
-- Check that your images follow the correct naming convention
-- Ensure the `embryo_data` directory contains valid image files
-
-## Advanced Options
-
-- Change the port by modifying the `--port` argument on the server
-- Adjust the number of training rounds by changing the `num_rounds` parameter in the `start_server` function
-- Modify the model architecture by editing the `Net` class in the code 
+This project is open source and available under the MIT License. 
