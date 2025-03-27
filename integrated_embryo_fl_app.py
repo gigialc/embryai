@@ -210,38 +210,67 @@ def parse_server_log():
                 if marker in content:
                     metrics["rounds"].append(i+1)
             
-            # Extract accuracy data
+            # Extract accuracy data - check different formats
+            # Try format 1: History (metrics, distributed, evaluate)
             if "History (metrics, distributed, evaluate)" in content:
-                acc_section = content.split("History (metrics, distributed, evaluate):")[1].split("\n")[1]
-                if "accuracy" in acc_section:
-                    # Parse the accuracy tuple list like [(1, 0.55), (2, 0.45), (3, 0.675)]
-                    acc_str = acc_section.strip().replace("'accuracy': [", "").replace("]", "").replace("(", "").replace(")", "")
-                    acc_pairs = acc_str.split(", ")
-                    for pair in acc_pairs:
-                        if "," in pair:
-                            round_num, acc = pair.split(",")
-                            try:
-                                # metrics["rounds"].append(int(round_num))
-                                metrics["accuracy"].append(float(acc))
-                            except ValueError:
-                                pass
+                try:
+                    acc_section = content.split("History (metrics, distributed, evaluate):")[1].split("\n")[1]
+                    if "accuracy" in acc_section:
+                        # Parse the accuracy tuple list like [(1, 0.55), (2, 0.45), (3, 0.675)]
+                        acc_str = acc_section.strip().replace("'accuracy': [", "").replace("]", "").replace("(", "").replace(")", "")
+                        acc_pairs = acc_str.split(", ")
+                        for pair in acc_pairs:
+                            if "," in pair:
+                                round_num, acc = pair.split(",")
+                                try:
+                                    metrics["accuracy"].append(float(acc))
+                                except ValueError:
+                                    pass
+                except (IndexError, ValueError):
+                    pass
             
-            # Extract loss values
+            # Try format 2: Direct accuracy mentions
+            accuracy_lines = [line for line in content.split('\n') if "accuracy:" in line]
+            if accuracy_lines and not metrics["accuracy"]:
+                for line in accuracy_lines:
+                    try:
+                        acc_value = float(line.split("accuracy:")[1].strip().split()[0])
+                        if acc_value >= 0 and acc_value <= 1:  # Valid accuracy range
+                            metrics["accuracy"].append(acc_value)
+                    except (ValueError, IndexError):
+                        pass
+            
+            # Extract loss values - check different formats
+            # Try format 1: History (loss, distributed)
             if "History (loss, distributed)" in content:
-                loss_section = content.split("History (loss, distributed):")[1]
-                loss_lines = loss_section.strip().split("\n")
+                try:
+                    loss_section = content.split("History (loss, distributed):")[1]
+                    loss_lines = loss_section.strip().split("\n")
+                    for line in loss_lines:
+                        if "round" in line and ":" in line:
+                            try:
+                                loss_value = float(line.split(":")[1].strip())
+                                metrics["loss"].append(loss_value)
+                            except (ValueError, IndexError):
+                                pass
+                except (IndexError, ValueError):
+                    pass
+            
+            # Try format 2: Direct loss mentions
+            loss_lines = [line for line in content.split('\n') if "loss:" in line]
+            if loss_lines and not metrics["loss"]:
                 for line in loss_lines:
-                    if "round" in line and ":" in line:
-                        try:
-                            loss_value = float(line.split(":")[1].strip())
+                    try:
+                        loss_value = float(line.split("loss:")[1].strip().split()[0])
+                        if loss_value >= 0:  # Valid loss range
                             metrics["loss"].append(loss_value)
-                        except (ValueError, IndexError):
-                            pass
+                    except (ValueError, IndexError):
+                        pass
             
             # Extract connected clients
             if "aggregate_fit: received " in content:
-                line = [l for l in content.split("\n") if "aggregate_fit: received " in l][-1]
                 try:
+                    line = [l for l in content.split("\n") if "aggregate_fit: received " in l][-1]
                     num_clients = int(line.split("aggregate_fit: received ")[1].split(" ")[0])
                     metrics["num_clients"] = num_clients
                 except (ValueError, IndexError):
@@ -265,28 +294,58 @@ def parse_client_logs():
             "status": "Unknown"
         }
         
+        if not os.path.exists(log_file):
+            metrics["status"] = "Log file not found"
+            client_metrics[client_id] = metrics
+            continue
+            
         try:
             with open(log_file, 'r') as f:
                 content = f.read()
                 
-                # Extract training metrics
-                epoch_lines = [line for line in content.split('\n') if "Epoch 1: train loss" in line]
+                # Extract training metrics - multiple patterns
+                
+                # Pattern 1: "Epoch X: train loss Y, accuracy Z"
+                epoch_lines = [line for line in content.split('\n') if "Epoch" in line and "train loss" in line]
                 
                 for line in epoch_lines:
                     try:
+                        epoch_num = int(line.split("Epoch")[1].split(":")[0].strip())
                         loss_part = line.split("train loss")[1].split(",")[0].strip()
                         acc_part = line.split("accuracy")[1].strip()
-                        metrics["epochs"].append(len(metrics["epochs"]) + 1)
+                        metrics["epochs"].append(epoch_num)
                         metrics["loss"].append(float(loss_part))
                         metrics["accuracy"].append(float(acc_part))
                     except (IndexError, ValueError):
                         pass
                 
+                # Pattern 2: "[Client X] fit" lines with loss/accuracy
+                fit_lines = [line for line in content.split('\n') if "[Client" in line and "fit" in line]
+                if fit_lines and not metrics["epochs"]:
+                    epoch_count = 0
+                    for line in fit_lines:
+                        # Look for nearby accuracy/loss lines
+                        idx = content.split('\n').index(line)
+                        nearby_lines = content.split('\n')[idx:idx+10]  # Look at 10 lines after fit
+                        for nearby in nearby_lines:
+                            if "loss:" in nearby and "accuracy:" in nearby:
+                                try:
+                                    loss_value = float(nearby.split("loss:")[1].split(",")[0].strip())
+                                    acc_value = float(nearby.split("accuracy:")[1].strip())
+                                    epoch_count += 1
+                                    metrics["epochs"].append(epoch_count)
+                                    metrics["loss"].append(loss_value)
+                                    metrics["accuracy"].append(acc_value)
+                                except (IndexError, ValueError):
+                                    pass
+                
                 # Determine status
                 if "Disconnect and shut down" in content:
                     metrics["status"] = "Training complete"
-                elif len(metrics["epochs"]) > 0:
+                elif "fit, config" in content and len(metrics["epochs"]) > 0:
                     metrics["status"] = f"Training in progress (Epoch {len(metrics['epochs'])})"
+                elif "fit, config" in content:
+                    metrics["status"] = "Training started"
                 elif "Model created on" in content:
                     metrics["status"] = "Connected, waiting for training"
                 
@@ -329,6 +388,9 @@ def get_system_status():
 
 def create_plots():
     """Create training progress plots for server and clients."""
+    # Close any existing figures to prevent the warning and memory issues
+    plt.close('all')
+    
     server_metrics = parse_server_log()
     client_metrics = parse_client_logs()
     
@@ -378,11 +440,16 @@ def create_plots():
     if client_metrics:
         # Create a figure with a subplot for each client
         num_clients = len(client_metrics)
-        fig_clients, axes = plt.subplots(num_clients, 1, figsize=(10, 4*num_clients))
+        fig_clients = plt.figure(figsize=(10, 4*num_clients))
         
-        # Handle the case with just one client
-        if num_clients == 1:
-            axes = [axes]
+        # Create multiple subplots vertically
+        axes = []
+        for i in range(num_clients):
+            if i == 0:
+                ax = fig_clients.add_subplot(num_clients, 1, i+1)
+            else:
+                ax = fig_clients.add_subplot(num_clients, 1, i+1, sharex=axes[0])
+            axes.append(ax)
         
         # Create a plot for each client
         for i, (client_id, metrics) in enumerate(client_metrics.items()):
@@ -398,7 +465,7 @@ def create_plots():
                 ax2.plot(metrics["epochs"], metrics["loss"], 'o-', color='red', label='Loss')
                 
                 # Set labels
-                ax.set_xlabel("Training Round")
+                ax.set_xlabel("Training Epoch")
                 ax.set_ylabel("Accuracy", color='blue')
                 ax2.set_ylabel("Loss", color='red')
                 
@@ -481,7 +548,72 @@ def launch_app():
                 
                 client_plots = gr.Plot(label="IVF Clinic Training Progress")
                 
+                # Add a terminal-like monitoring component
+                gr.Markdown("### Live Training Logs")
+                with gr.Accordion("Server Log (Last 10 lines)", open=False):
+                    server_log_display = gr.Textbox(label="", lines=10, max_lines=10)
+                
+                with gr.Accordion("IVF Clinic Logs", open=False):
+                    client_log_display = gr.Textbox(label="", lines=15, max_lines=15)
+                
                 vis_refresh_btn = gr.Button("Refresh Plots")
+                
+                # Function to get the latest log content
+                def get_latest_logs():
+                    server_log_text = "No server log available"
+                    client_log_text = "No client logs available"
+                    
+                    # Read the server log
+                    if os.path.exists(server_log_file):
+                        try:
+                            with open(server_log_file, 'r') as f:
+                                lines = f.readlines()
+                                # Get last 10 lines
+                                server_log_text = "".join(lines[-10:]) if len(lines) > 0 else "No log content yet"
+                        except Exception as e:
+                            server_log_text = f"Error reading log: {str(e)}"
+                    
+                    # Read client logs
+                    client_logs = []
+                    for client_id, info in client_processes.items():
+                        log_file = info["log_file"]
+                        if os.path.exists(log_file):
+                            try:
+                                with open(log_file, 'r') as f:
+                                    lines = f.readlines()
+                                    # Get last 5 lines
+                                    last_lines = "".join(lines[-5:]) if len(lines) > 0 else "No log content yet"
+                                    client_logs.append(f"=== IVF Clinic {client_id} ===\n{last_lines}\n")
+                            except Exception as e:
+                                client_logs.append(f"=== IVF Clinic {client_id} ===\nError reading log: {str(e)}\n")
+                    
+                    if client_logs:
+                        client_log_text = "\n".join(client_logs)
+                    
+                    return server_log_text, client_log_text
+                
+                # Update all visualizations including logs
+                def update_all_visualizations():
+                    status = get_system_status()
+                    server_fig, client_figs = create_plots()
+                    server_log_text, client_log_text = get_latest_logs()
+                    return status, server_fig, client_figs if client_figs else gr.update(value=None), server_log_text, client_log_text
+                
+                # Connect the refresh button to update everything
+                vis_refresh_btn.click(
+                    fn=update_all_visualizations,
+                    inputs=[],
+                    outputs=[status_output, server_plot, client_plots, server_log_display, client_log_display]
+                )
+                
+                # Add a 'Refresh All' button for updating everything at once
+                gr.Markdown("**Note:** Click 'Refresh All' to update status, plots, and logs")
+                refresh_all_btn = gr.Button("Refresh All", variant="primary")
+                refresh_all_btn.click(
+                    fn=update_all_visualizations,
+                    inputs=[],
+                    outputs=[status_output, server_plot, client_plots, server_log_display, client_log_display]
+                )
         
         # Set up event handlers
         start_server_btn.click(
@@ -510,35 +642,6 @@ def launch_app():
             fn=update_status,
             inputs=[],
             outputs=[status_output]
-        )
-        
-        # Update plots
-        def update_plots():
-            server_fig, client_figs = create_plots()
-            return server_fig, client_figs if client_figs else gr.update(value=None)
-        
-        vis_refresh_btn.click(
-            fn=update_plots,
-            inputs=[],
-            outputs=[server_plot, client_plots]
-        )
-        
-        # Set up automatic refresh (every 5 seconds)
-        def auto_refresh():
-            status = update_status()
-            server_fig, client_figs = create_plots()
-            return status, server_fig, client_figs if client_figs else gr.update(value=None)
-        
-        # Remove timer functionality - use manual refresh only
-        # Comment on how to refresh: Add instruction text
-        gr.Markdown("**Note:** Click 'Refresh All' to update both status and plots.")
-        
-        # Add a 'Refresh All' button
-        refresh_all_btn = gr.Button("Refresh All", variant="primary")
-        refresh_all_btn.click(
-            fn=auto_refresh,
-            inputs=[],
-            outputs=[status_output, server_plot, client_plots]
         )
         
     # Launch the app
